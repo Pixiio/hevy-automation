@@ -2,7 +2,7 @@ name: Weekly Hevy Workout Check
 
 on:
   schedule:
-    - cron: '39 22 * * 5' # Change this cron expression to your liking
+    - cron: '0 6 * * 1' # Change this cron expression to your liking
   
   # Allows you to run this manually from the Actions tab for testing
   workflow_dispatch:
