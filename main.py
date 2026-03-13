@@ -5,10 +5,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, timezone
 
-# ==========================================
-# CONFIG
-# ==========================================
-
 HEVY_API_KEY = os.environ.get("HEVY_API_KEY")
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
@@ -18,14 +14,8 @@ HEVY_API_URL = "https://api.hevyapp.com/v1"
 
 REP_MIN = 8
 REP_MAX = 12
-PROGRESSION_RPE_TRIGGER = 9
-
 ROUNDING = 0.5
 
-
-# ==========================================
-# HELPERS
-# ==========================================
 
 def round_weight(weight):
     return round(weight / ROUNDING) * ROUNDING
@@ -50,13 +40,24 @@ def get_increment(name):
     return 2.5
 
 
-def set_score(weight, reps):
-    return weight * reps
+def best_set(sets):
 
+    best = None
+    best_score = 0
 
-# ==========================================
-# API
-# ==========================================
+    for s in sets:
+
+        w = s.get("weight_kg") or 0
+        r = s.get("reps") or 0
+
+        score = w * r
+
+        if score > best_score:
+            best_score = score
+            best = s
+
+    return best
+
 
 def fetch_workouts(days):
 
@@ -94,58 +95,11 @@ def fetch_workouts(days):
     return workouts
 
 
-# ==========================================
-# ANALYSIS
-# ==========================================
-
-def best_set(sets):
-
-    best = None
-    best_score = 0
-
-    for s in sets:
-
-        weight = s.get("weight_kg") or 0
-        reps = s.get("reps") or 0
-
-        score = set_score(weight,reps)
-
-        if score > best_score:
-            best_score = score
-            best = s
-
-    return best
-
-
-def find_pr(exercise_name, workouts):
-
-    best_score_val = 0
-
-    for w in workouts:
-
-        for ex in w.get("exercises",[]):
-
-            if ex.get("title") != exercise_name:
-                continue
-
-            for s in ex.get("sets",[]):
-
-                score = set_score(
-                    s.get("weight_kg") or 0,
-                    s.get("reps") or 0
-                )
-
-                if score > best_score_val:
-                    best_score_val = score
-
-    return best_score_val
-
-
-def plateau_detect(exercise_name, workouts):
+def detect_plateau(exercise_name, history):
 
     weights = []
 
-    for w in workouts:
+    for w in history:
 
         for ex in w.get("exercises",[]):
 
@@ -153,7 +107,6 @@ def plateau_detect(exercise_name, workouts):
                 continue
 
             b = best_set(ex.get("sets",[]))
-
             if not b:
                 continue
 
@@ -164,10 +117,6 @@ def plateau_detect(exercise_name, workouts):
 
     return weights[-1] == weights[-2] == weights[-3]
 
-
-# ==========================================
-# PROGRESSION
-# ==========================================
 
 def calculate_next_target(exercise_name, sets, history):
 
@@ -182,44 +131,24 @@ def calculate_next_target(exercise_name, sets, history):
 
     increment = get_increment(exercise_name)
 
-    pr_score = find_pr(exercise_name,history)
-
-    score = set_score(weight,reps)
-
-    plateau = plateau_detect(exercise_name,history)
-
-    badge_color="#e2e3e5"
-    text_color="#383d41"
-
-    # =====================================
-    # PROGRESSION RULES
-    # =====================================
-
-    if score >= pr_score and reps>=REP_MIN:
-
-        badge_color="#ffeeba"
-        text_color="#856404"
-
-        pr_tag=" 🏆 PR"
-    else:
-        pr_tag=""
+    plateau = detect_plateau(exercise_name, history)
 
     if plateau:
 
-        new_weight = round_weight(weight*0.9)
+        new_weight = round_weight(weight * 0.9)
 
-        action="DELOAD"
-        target=f"Reset: {new_weight} kg"
+        action = "DELOAD"
+        target = f"Reset to {new_weight} kg"
 
         badge_color="#f8d7da"
         text_color="#721c24"
 
-    elif reps >= REP_MAX and rpe <= PROGRESSION_RPE_TRIGGER:
+    elif reps >= REP_MAX:
 
-        new_weight = round_weight(weight+increment)
+        new_weight = round_weight(weight + increment)
 
         action="INCREASE WEIGHT"
-        target=f"{new_weight} kg"
+        target=f"Target: {new_weight} kg"
 
         badge_color="#d4edda"
         text_color="#155724"
@@ -227,7 +156,7 @@ def calculate_next_target(exercise_name, sets, history):
     elif reps < REP_MAX:
 
         action="ADD REPS"
-        target=f"{min(reps+1,REP_MAX)} reps"
+        target=f"Target: {reps+1} reps"
 
         badge_color="#cce5ff"
         text_color="#004085"
@@ -237,19 +166,18 @@ def calculate_next_target(exercise_name, sets, history):
         action="MAINTAIN"
         target="Try +1 rep"
 
+        badge_color="#e2e3e5"
+        text_color="#383d41"
+
     return {
         "exercise":exercise_name,
-        "last":f"{reps} @ {weight} kg (RPE {rpe}){pr_tag}",
+        "last":f"{reps} @ {weight} kg (RPE {rpe})",
         "action":action,
         "target_display":target,
         "badge_color":badge_color,
         "text_color":text_color
     }
 
-
-# ==========================================
-# EMAIL
-# ==========================================
 
 def send_email(html_body,text_body,start,end):
 
@@ -269,14 +197,10 @@ def send_email(html_body,text_body,start,end):
     s.quit()
 
 
-# ==========================================
-# MAIN
-# ==========================================
-
 if __name__=="__main__":
 
-    week_workouts=fetch_workouts(7)
-    history_workouts=fetch_workouts(28)
+    week_workouts = fetch_workouts(7)
+    history = fetch_workouts(28)
 
     routines={}
 
@@ -290,43 +214,109 @@ if __name__=="__main__":
     end_date=datetime.now().strftime("%b %d")
     start_date=(datetime.now()-timedelta(days=7)).strftime("%b %d")
 
-    html=f"""
+    html_content=f"""
+<!DOCTYPE html>
 <html>
-<body style="background:#f6f9fc;font-family:Arial;padding:20px;">
-<h1>Next Week Targets</h1>
-<p>{start_date} - {end_date}</p>
+<body style="margin:0;padding:0;background:#f6f9fc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto;">
+<table width="100%" style="padding:20px;">
+<tr>
+<td align="center">
+
+<table width="600" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,0.05);">
+
+<tr>
+<td style="background:#212529;padding:30px;text-align:center;">
+<h1 style="color:#fff;margin:0;">Next Week's Targets</h1>
+<p style="color:#adb5bd;">Review of {start_date} - {end_date}</p>
+</td>
+</tr>
+
+<tr>
+<td style="padding:40px;">
 """
 
-    text=f"Training plan {start_date}-{end_date}\n\n"
+    text_content=""
 
     for title,data in routines.items():
 
-        date=data["start_time"].replace("Z","+00:00")
-        day=datetime.fromisoformat(date).strftime("%A")
+        raw_date=data["start_time"].replace("Z","+00:00")
+        day=datetime.fromisoformat(raw_date).strftime("%A")
 
-        html+=f"<h2>{title}</h2><p>{day}</p>"
+        html_content+=f"""
+<div style="margin-bottom:30px;">
+
+<div style="border-bottom:2px solid #eee;padding-bottom:10px;margin-bottom:15px;">
+<h2 style="margin:0;">{title}</h2>
+<span style="font-size:12px;color:#888;">Last Session: {day}</span>
+</div>
+"""
 
         for ex in data.get("exercises",[]):
 
             res=calculate_next_target(
                 ex.get("title"),
                 ex.get("sets",[]),
-                history_workouts
+                history
             )
 
             if not res:
                 continue
 
-            html+=f"""
-<p>
-<b>{res['exercise']}</b><br>
-{res['last']}<br>
-<b>{res['action']}</b> → {res['target_display']}
-</p>
+            badge_style=f"""
+background-color:{res['badge_color']};
+color:{res['text_color']};
+padding:4px 8px;
+border-radius:4px;
+font-size:11px;
+font-weight:bold;
 """
 
-            text+=f"{res['exercise']} → {res['target_display']}\n"
+            html_content+=f"""
+<div style="padding:12px 0;border-bottom:1px solid #f0f0f0;">
 
-    html+="</body></html>"
+<table width="100%">
+<tr>
 
-    send_email(html,text,start_date,end_date)
+<td width="60%">
+<strong>{res['exercise']}</strong><br>
+<span style="color:#999;">Top Set: {res['last']}</span>
+</td>
+
+<td width="40%" align="right">
+
+<span style="{badge_style}">
+{res['action']}
+</span>
+
+<div style="margin-top:5px;font-weight:600;">
+{res['target_display']}
+</div>
+
+</td>
+</tr>
+</table>
+
+</div>
+"""
+
+        html_content+="</div>"
+
+    html_content+="""
+</td>
+</tr>
+
+<tr>
+<td style="background:#f8f9fa;padding:20px;text-align:center;">
+Generated by Hevy Automation Script
+</td>
+</tr>
+
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>
+"""
+
+    send_email(html_content,text_content,start_date,end_date)
